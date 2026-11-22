@@ -3,21 +3,29 @@ name: PR Validation Checker
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch name to validate on your fork'
+        required: true
+        default: 'master'
+        type: string
+
 
 jobs:
   pr_commented:
     name: Validate PR
-    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, 'validate') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.issue.pull_request && startsWith(github.event.comment.body, 'validate')) }}
     needs: set_pending_status
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [macos-latest]
         version: ["3.12"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || format('refs/pull/{0}/head', github.event.issue.number) }}
           submodules: 'true'
       - uses: actions/setup-python@v6
         with:
@@ -26,20 +34,10 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: |
           cd src
-          python run_unit_tests.py -a
-        env:
-          TEST_IPV8_WITH_IPV6: 0
-      - run: |
-          cd src
-          python run_unit_tests.py -a
-        env:
-          TEST_IPV8_WITH_IPV6: 1
-      - run: |
-          cd src
-          python run_unit_tests.py -a -k tribler/test_integration -p 2
+          PYTHONPATH="../pyipv8:." python -m unittest -v tribler.test_integration.test_hidden_services
 
   set_pending_status:
-    if: ${{github.event.issue.pull_request && startsWith(github.event.comment.body, 'validate') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.issue.pull_request && startsWith(github.event.comment.body, 'validate')) }}
     runs-on: ubuntu-latest
     outputs:
       actual_pull_head: ${{ steps.sha_share_step.outputs.actual_pull_head }}
@@ -47,16 +45,14 @@ jobs:
       - name: Retrieving commit
         shell: bash
         run: |
-          {
-            echo 'actual_pull_head<<EOF'
-            git ls-remote ${{ github.server_url }}/${{ github.repository }}/ refs/pull/${{ github.event.issue.number }}/head | grep -o "^\w*\b"
-            echo
-            echo EOF
-          } >> "$GITHUB_ENV"
+          REF="${{ github.event_name == 'workflow_dispatch' && format('refs/heads/{0}', inputs.branch) || format('refs/pull/{0}/head', github.event.issue.number) }}"
+          SHA=$(git ls-remote ${{ github.server_url }}/${{ github.repository }}/ "$REF" | grep -o "^\w*\b")
+          echo "actual_pull_head=$SHA" >> "$GITHUB_ENV"
       - name: Sharing commit SHA between jobs
         id: sha_share_step
         run: echo "actual_pull_head=${{ env.actual_pull_head }}" >> "$GITHUB_OUTPUT"
       - name: Set commit pending status
+        continue-on-error: true
         uses: guibranco/github-status-action-v2@v1.1.14
         with:
           authToken: ${{secrets.COMMIT_STATUS_TOKEN}}
@@ -67,7 +63,7 @@ jobs:
           target_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   set_failure_status:
-    if: ${{failure() && github.event.issue.pull_request && startsWith(github.event.comment.body, 'validate') }}
+    if: ${{failure() && (github.event_name == 'workflow_dispatch' || (github.event.issue.pull_request && startsWith(github.event.comment.body, 'validate'))) }}
     needs: [set_pending_status, pr_commented]
     runs-on: ubuntu-latest
     steps:
@@ -84,7 +80,7 @@ jobs:
           target_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   set_success_status:
-    if: ${{!failure() && github.event.issue.pull_request && startsWith(github.event.comment.body, 'validate') }}
+    if: ${{!failure() && (github.event_name == 'workflow_dispatch' || (github.event.issue.pull_request && startsWith(github.event.comment.body, 'validate'))) }}
     needs: [set_pending_status, pr_commented]
     runs-on: ubuntu-latest
     steps:

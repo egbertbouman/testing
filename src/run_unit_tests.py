@@ -5,6 +5,8 @@ import pathlib
 import platform
 import sys
 import time
+import traceback
+import types
 import unittest
 from concurrent.futures import ProcessPoolExecutor
 
@@ -16,6 +18,17 @@ from run_all_tests import (
     find_all_test_class_names,
     task_test,
 )
+
+
+class VerboseProgrammerDistractor(ProgrammerDistractor):
+    def __exit__(self,
+                 exc_type: type[BaseException] | None,
+                 exc: BaseException | None,
+                 exc_tb: types.TracebackType | None) -> bool:
+        if exc_type is not None or exc is not None:
+            traceback.print_exception(exc_type, exc, exc_tb)
+        return super().__exit__(exc_type, exc, exc_tb)
+
 
 if platform.system() == "Darwin":
     """
@@ -53,7 +66,7 @@ if __name__ == "__main__":
 
     print(f"Launching in {process_count} processes ... awaiting results ... \033[s", end="", flush=True)  # noqa: T201
 
-    with ProgrammerDistractor(not args.noanimation) as programmer_distractor:
+    with VerboseProgrammerDistractor(not args.noanimation) as programmer_distractor:
         with ProcessPoolExecutor(max_workers=process_count) as executor:
             result = executor.map(task_test, test_class_names,
                                   chunksize=len(test_class_names) // process_count + 1)
